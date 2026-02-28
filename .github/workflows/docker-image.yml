@@ -154,45 +154,57 @@ jobs:
           severity: CRITICAL,HIGH
 
   # ========================================================
-  # COMMENTED: CD Repo Update (Uncomment to enable)
-  # ========================================================
-  #update_cd_repo:
-  #  runs-on: ubuntu-latest
-  #  needs: trivy_image_scan
-  #  steps:
-  #    - name: Checkout CD repo
-  #      uses: actions/checkout@v4
-  #      with:
-  #        repository: rehmannmsd-byte/CD-GithubA-3tier
-  #        ref: main
-  #        token: ${{ secrets.CD_REPO_TOKEN }}
-  #        path: cd
-  #
-  #    - name: Install yq & Bump images in manifests
-  #      working-directory: cd
-  #      env:
-  #        IMAGE_TAG: ${{ env.IMAGE_TAG }}
-  #      run: |
-  #        # Install yq
-  #        curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o yq
-  #        chmod +x yq
-  #        sudo mv yq /usr/local/bin/
-  #
-  #        # Safety cleanup: remove accidental .spec.template from Service docs
-  #        yq eval -i 'select(.kind=="Service") | del(.spec.template)' k8s-prod/backend.yaml
-  #        yq eval -i 'select(.kind=="Service") | del(.spec.template)' k8s-prod/frontend.yaml
-  #
-  #        # Update Deployment images (backend)
-  #        yq eval -i '.spec.template.spec.containers |= map(select(.name=="backend") | .image = "wizardreo/backend:" + env(IMAGE_TAG))' k8s-prod/backend.yaml
-  #
-  #        # Update Deployment images (frontend)
-  #        yq eval -i '.spec.template.spec.containers |= map(select(.name=="frontend") | .image = "wizardreo/frontend:" + env(IMAGE_TAG))' k8s-prod/frontend.yaml
-  #
-  #    - name: Commit & push to CD repo
-  #      working-directory: cd
-  #      run: |
-  #        git config user.name "ci-bot"
-  #        git config user.email "ci-bot@users.noreply.github.com"
-  #        git add -A
-  #        git commit -m "chore: bump images to ${{ env.IMAGE_TAG }}" || echo "No changes to commit"
-  #        git push
+# CD Repo Update (Single full.yml Version)
+# ========================================================
+update_cd_repo:
+  runs-on: ubuntu-latest
+  needs: trivy_image_scan
+  steps:
+    - name: Checkout CD repo
+      uses: actions/checkout@v4
+      with:
+        repository: rehmannmsd-byte/CD-GithubA-3tier
+        ref: main
+        token: ${{ secrets.CD_REPO_TOKEN }}
+        path: cd
+
+    - name: Install yq & Bump images in full.yml
+      working-directory: cd
+      env:
+        IMAGE_TAG: ${{ env.IMAGE_TAG }}
+      run: |
+        # Install yq
+        curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o yq
+        chmod +x yq
+        sudo mv yq /usr/local/bin/
+
+        FILE="full.yml"
+
+        # Update Backend Deployment image
+        yq eval -i '
+          select(.kind=="Deployment" and .metadata.name=="backend")
+          .spec.template.spec.containers |=
+          map(if .name=="backend"
+              then .image = "wizardreo/backend:" + env(IMAGE_TAG)
+              else .
+          end)
+        ' $FILE
+
+        # Update Frontend Deployment image
+        yq eval -i '
+          select(.kind=="Deployment" and .metadata.name=="frontend")
+          .spec.template.spec.containers |=
+          map(if .name=="frontend"
+              then .image = "wizardreo/frontend:" + env(IMAGE_TAG)
+              else .
+          end)
+        ' $FILE
+
+    - name: Commit & push to CD repo
+      working-directory: cd
+      run: |
+        git config user.name "ci-bot"
+        git config user.email "ci-bot@users.noreply.github.com"
+        git add full.yml
+        git commit -m "chore: bump images to $IMAGE_TAG" || echo "No changes to commit"
+        git push origin main
