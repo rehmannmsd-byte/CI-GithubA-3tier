@@ -162,7 +162,7 @@ jobs:
           chmod +x yq
           sudo mv yq /usr/local/bin/
 
-          FILE="full.yml"
+          FILE="k8s-prod/full.yml"
 
           yq eval -i '
             select(.kind=="Deployment" and .metadata.name=="backend")
