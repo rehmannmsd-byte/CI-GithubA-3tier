@@ -2,7 +2,8 @@ name: Node.js CI
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -15,20 +16,18 @@ jobs:
   compile:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '23'
+          node-version: "23"
 
-      - name: Frontend Compilation (Syntax Check)
+      - name: Frontend Compilation
         run: |
           cd client
           find . -name "*.js" -exec node --check {} +
 
-      - name: Backend Compilation (Syntax Check)
+      - name: Backend Compilation
         run: |
           cd api
           find . -name "*.js" -exec node --check {} +
@@ -39,10 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Gitleaks Setup
-        uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v2
 
-      - name: Gitleaks Scan
+      - name: Run Gitleaks
         run: |
           gitleaks detect --source ./client --exit-code 1
           gitleaks detect --source ./api --exit-code 1
@@ -53,8 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Trivy FS Scan
-        uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -63,14 +60,13 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-  build_backend_docker_image_and_push:
+  build_backend:
     runs-on: ubuntu-latest
     needs: trivy_fs_scan
     steps:
       - uses: actions/checkout@v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -78,8 +74,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build and Push Backend Image
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: ./api
           file: ./api/Dockerfile
@@ -88,14 +83,13 @@ jobs:
             wizardreo/backend:latest
             wizardreo/backend:${{ env.IMAGE_TAG }}
 
-  build_frontend_docker_image_and_push:
+  build_frontend:
     runs-on: ubuntu-latest
     needs: trivy_fs_scan
     steps:
       - uses: actions/checkout@v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -103,8 +97,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build and Push Frontend Image
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: ./client
           file: ./client/Dockerfile
@@ -116,27 +109,25 @@ jobs:
   trivy_image_scan:
     runs-on: ubuntu-latest
     needs:
-      - build_backend_docker_image_and_push
-      - build_frontend_docker_image_and_push
+      - build_backend
+      - build_frontend
     steps:
-      - name: Run Trivy Image Scan - Backend
-        uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
           image-ref: wizardreo/backend:${{ env.IMAGE_TAG }}
           format: table
-          exit-code: '0'
+          exit-code: "0"
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      - name: Run Trivy Image Scan - Frontend
-        uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
           image-ref: wizardreo/frontend:${{ env.IMAGE_TAG }}
           format: table
-          exit-code: '0'
+          exit-code: "0"
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
@@ -153,7 +144,7 @@ jobs:
           token: ${{ secrets.CD_REPO_TOKEN }}
           path: cd
 
-      - name: Install yq & Update full.yml
+      - name: Install yq and update full.yml
         working-directory: cd
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
@@ -164,29 +155,15 @@ jobs:
 
           FILE="k8s-prod/full.yml"
 
-          yq eval -i '
-            select(.kind=="Deployment" and .metadata.name=="backend")
-            .spec.template.spec.containers |=
-            map(if .name=="backend"
-                then .image = "wizardreo/backend:" + env(IMAGE_TAG)
-                else .
-            end)
-          ' $FILE
+          yq e -i '(.[] | select(.kind=="Deployment" and .metadata.name=="backend").spec.template.spec.containers[0].image) = "wizardreo/backend:" + strenv(IMAGE_TAG)' $FILE
 
-          yq eval -i '
-            select(.kind=="Deployment" and .metadata.name=="frontend")
-            .spec.template.spec.containers |=
-            map(if .name=="frontend"
-                then .image = "wizardreo/frontend:" + env(IMAGE_TAG)
-                else .
-            end)
-          ' $FILE
+          yq e -i '(.[] | select(.kind=="Deployment" and .metadata.name=="frontend").spec.template.spec.containers[0].image) = "wizardreo/frontend:" + strenv(IMAGE_TAG)' $FILE
 
-      - name: Commit & Push to CD repo
+      - name: Commit and push
         working-directory: cd
         run: |
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
-          git add full.yml
-          git commit -m "chore: bump images to $IMAGE_TAG" || echo "No changes to commit"
+          git add k8s-prod/full.yml
+          git commit -m "chore: bump images to $IMAGE_TAG" || echo "No changes"
           git push origin main
